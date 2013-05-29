@@ -70,6 +70,8 @@ public class RELAY2 extends Protocol {
       "Async relay creation is recommended, so the view callback won't be blocked")
     protected boolean                                  async_relay_creation=true;
 
+    @Property(description="If true, a received message can be forwarded to other members of the local cluster")
+    protected boolean                                  can_forward_local_cluster=false;
 
     /* ---------------------------------------------    Fields    ------------------------------------------------ */
     @ManagedAttribute(description="My site-ID")
@@ -90,6 +92,8 @@ public class RELAY2 extends Protocol {
     protected TimeScheduler                            timer;
 
     protected volatile Address                         local_addr;
+    
+    protected volatile List<Address>                   members=new ArrayList<Address>(11);
 
     /** Whether or not FORWARD_TO_COORD is on the stack */
     @ManagedAttribute(description="FORWARD_TO_COORD protocol is present below the current protocol")
@@ -378,14 +382,30 @@ public class RELAY2 extends Protocol {
      * @param buf
      */
     protected void route(SiteAddress dest, SiteAddress sender, Message msg) {
-        short target_site=dest.getSite();
-        if(target_site == site_id) {
-            if(local_addr.equals(dest) || ((dest instanceof SiteMaster) && is_coord)) {
-                deliver(dest, sender, msg);
-            }
-            else
-                deliverLocally(dest, sender, msg); // send to member in same local site
-            return;
+        short target_site=dest.getSite();                        
+        if(target_site == site_id) {           
+           Address final_dest = dest;                      
+           
+           // If configured to do so, we want to load-balance these messages, 
+           // so we'll introduce a bit of entropy here.
+           if( (dest instanceof SiteMaster) && is_coord && can_forward_local_cluster ) {
+                                                                 
+              int index = (int)Util.random( members.size() ) - 1; 
+              final_dest = members.get(index);
+           }
+              
+           if(local_addr.equals(final_dest) ) {               
+               deliver(dest, sender, msg);           
+           }
+           else {
+              
+              UUID tmp = (UUID)final_dest;
+              SiteAddress final_uuid = new SiteUUID( tmp, SiteUUID.getSiteName(target_site), target_site );               
+              deliverLocally(final_uuid, sender, msg); // send to member in same local site
+           }
+           
+           return;
+            
         }
         Relayer tmp=relayer;
         if(tmp == null) {
@@ -484,6 +504,12 @@ public class RELAY2 extends Protocol {
 
 
     protected void handleView(View view) {
+       
+        // First, save the members for routing received messages to local members.        
+        List<Address> new_members=view.getMembers();
+        members = new_members; 
+       
+        // Are we the new coordinator?
         Address old_coord=coord, new_coord=determineSiteMaster(view);
         boolean become_coord=new_coord.equals(local_addr) && (old_coord == null || !old_coord.equals(local_addr));
         boolean cease_coord=old_coord != null && old_coord.equals(local_addr) && !new_coord.equals(local_addr);
