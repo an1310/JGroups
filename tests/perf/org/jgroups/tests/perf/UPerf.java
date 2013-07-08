@@ -30,11 +30,12 @@ import java.util.concurrent.atomic.AtomicInteger;
  * @author Bela Ban
  */
 public class UPerf extends ReceiverAdapter {
-    private JChannel             channel;
-    private Address              local_addr;
-    private RpcDispatcher        disp;
-    static final String          groupname="uperf";
-    private final List<Address>  members=new ArrayList<Address>();
+    private JChannel               channel;
+    private Address                local_addr;
+    private RpcDispatcher          disp;
+    static final String            groupname="uperf";
+    protected final List<Address>  members=new ArrayList<Address>();
+    protected final List<Address>  site_masters=new ArrayList<Address>();
 
 
     // ============ configurable properties ==================
@@ -63,8 +64,6 @@ public class UPerf extends ReceiverAdapter {
 
     private final AtomicInteger COUNTER=new AtomicInteger(1);
     private byte[] GET_RSP=new byte[msg_size];
-
-    private static final Class<?>[] unicast_protocols=new Class<?>[]{UNICAST.class, UNICAST2.class};
 
     static NumberFormat f;
 
@@ -96,7 +95,7 @@ public class UPerf extends ReceiverAdapter {
     }
 
 
-    public void init(String props, String name) throws Throwable {
+    public void init(String props, String name, boolean xsite) throws Throwable {
         channel=new JChannel(props);
         if(name != null)
             channel.setName(name);
@@ -160,11 +159,23 @@ public class UPerf extends ReceiverAdapter {
         System.out.println("** view: " + new_view);
         members.clear();
         members.addAll(new_view.getMembers());
+        addSiteMastersToMembers();
+    }
+
+    protected void addSiteMastersToMembers() {
+        if(!site_masters.isEmpty()) {
+            for(Address sm: site_masters)
+                if(!members.contains(sm))
+                    members.add(sm);
+        }
     }
 
     // =================================== callbacks ======================================
 
     public Results startTest() throws Throwable {
+
+        addSiteMastersToMembers();
+
         System.out.println("invoking " + num_msgs + " RPCs of " + Util.printBytes(msg_size) +
                              ", sync=" + sync + ", oob=" + oob + ", use_anycast_addrs=" + use_anycast_addrs);
         int total_gets=0, total_puts=0;
@@ -249,6 +260,8 @@ public class UPerf extends ReceiverAdapter {
     public void eventLoop() throws Throwable {
         int c;
 
+        addSiteMastersToMembers();
+
         while(true) {
             c=Util.keyPress("[1] Send msgs [2] Print view [3] Print conns " +
                               "[4] Trash conn [5] Trash all conns" +
@@ -322,7 +335,7 @@ public class UPerf extends ReceiverAdapter {
     }
 
    private void printConnections() {
-        Protocol prot=channel.getProtocolStack().findProtocol(unicast_protocols);
+        Protocol prot=channel.getProtocolStack().findProtocol(Util.getUnicastProtocols());
         if(prot instanceof UNICAST)
             System.out.println("connections:\n" + ((UNICAST)prot).printConnections());
         else if(prot instanceof UNICAST2)
@@ -332,7 +345,7 @@ public class UPerf extends ReceiverAdapter {
     private void removeConnection() {
         Address member=getReceiver();
         if(member != null) {
-            Protocol prot=channel.getProtocolStack().findProtocol(unicast_protocols);
+            Protocol prot=channel.getProtocolStack().findProtocol(Util.getUnicastProtocols());
             if(prot instanceof UNICAST)
                 ((UNICAST)prot).removeConnection(member);
             else if(prot instanceof UNICAST2)
@@ -341,7 +354,7 @@ public class UPerf extends ReceiverAdapter {
     }
 
     private void removeAllConnections() {
-        Protocol prot=channel.getProtocolStack().findProtocol(unicast_protocols);
+        Protocol prot=channel.getProtocolStack().findProtocol(Util.getUnicastProtocols());
         if(prot instanceof UNICAST)
             ((UNICAST)prot).removeAllConnections();
         else if(prot instanceof UNICAST2)
@@ -352,7 +365,7 @@ public class UPerf extends ReceiverAdapter {
     /** Kicks off the benchmark on all cluster nodes */
     void startBenchmark() throws Throwable {
         RequestOptions options=new RequestOptions(ResponseMode.GET_ALL, 0);
-        options.setFlags(Message.OOB, Message.DONT_BUNDLE, Message.NO_FC);
+        options.setFlags(Message.Flag.OOB, Message.Flag.DONT_BUNDLE, Message.NO_FC);
         RspList<Object> responses=disp.callRemoteMethods(null, new MethodCall(START), options);
 
         long total_reqs=0;
@@ -370,7 +383,7 @@ public class UPerf extends ReceiverAdapter {
         double total_reqs_sec=total_reqs / ( total_time/ 1000.0);
         double throughput=total_reqs_sec * msg_size;
         double ms_per_req=total_time / (double)total_reqs;
-        Protocol prot=channel.getProtocolStack().findProtocol(unicast_protocols);
+        Protocol prot=channel.getProtocolStack().findProtocol(Util.getUnicastProtocols());
         System.out.println("\n");
         System.out.println(Util.bold("Average of " + f.format(total_reqs_sec) + " requests / sec (" +
                                        Util.printBytes(throughput) + " / sec), " +
@@ -416,7 +429,7 @@ public class UPerf extends ReceiverAdapter {
 
 
     void printView() {
-        System.out.println("\n-- view: " + channel.getView() + '\n');
+        System.out.println("\n-- view: " + members + '\n');
         try {
             System.in.skip(System.in.available());
         }
@@ -473,16 +486,16 @@ public class UPerf extends ReceiverAdapter {
             RequestOptions put_options=new RequestOptions(sync ? ResponseMode.GET_ALL : ResponseMode.GET_NONE, 40000, true, null);
 
             // Don't use bundling as we have sync requests (e.g. GETs) regardless of whether we set sync=true or false
-            get_options.setFlags(Message.DONT_BUNDLE);
-            put_options.setFlags(Message.DONT_BUNDLE);
+            get_options.setFlags(Message.Flag.DONT_BUNDLE);
+            put_options.setFlags(Message.Flag.DONT_BUNDLE);
 
             if(oob) {
-                get_options.setFlags(Message.OOB);
-                put_options.setFlags(Message.OOB);
+                get_options.setFlags(Message.Flag.OOB);
+                put_options.setFlags(Message.Flag.OOB);
             }
             if(sync) {
-                get_options.setFlags(Message.DONT_BUNDLE, Message.NO_FC);
-                put_options.setFlags(Message.DONT_BUNDLE, Message.NO_FC);
+                get_options.setFlags(Message.Flag.DONT_BUNDLE, Message.NO_FC);
+                put_options.setFlags(Message.Flag.DONT_BUNDLE, Message.NO_FC);
             }
             if(use_anycast_addrs) {
                 put_options.useAnycastAddresses(true);
@@ -723,8 +736,9 @@ public class UPerf extends ReceiverAdapter {
 
 
     public static void main(String[] args) {
-        String props=null;
-        String name=null;
+        String  props=null;
+        String  name=null;
+        boolean xsite=true;
 
 
         for(int i=0; i < args.length; i++) {
@@ -736,6 +750,10 @@ public class UPerf extends ReceiverAdapter {
                 name=args[++i];
                 continue;
             }
+            if("-xsite".equals(args[i])) {
+                xsite=Boolean.valueOf(args[++i]);
+                continue;
+            }
             help();
             return;
         }
@@ -743,7 +761,7 @@ public class UPerf extends ReceiverAdapter {
         UPerf test=null;
         try {
             test=new UPerf();
-            test.init(props, name);
+            test.init(props, name, xsite);
             test.eventLoop();
         }
         catch(Throwable ex) {
@@ -754,7 +772,7 @@ public class UPerf extends ReceiverAdapter {
     }
 
     static void help() {
-        System.out.println("UPerf [-props <props>] [-name name]");
+        System.out.println("UPerf [-props <props>] [-name name] [-xsite <true | false>]");
     }
 
 

@@ -10,6 +10,8 @@ import org.jgroups.logging.Log;
 import org.jgroups.protocols.*;
 import org.jgroups.protocols.pbcast.FLUSH;
 import org.jgroups.protocols.pbcast.GMS;
+import org.jgroups.protocols.pbcast.NAKACK2;
+import org.jgroups.protocols.pbcast.STABLE;
 import org.jgroups.protocols.relay.SiteMaster;
 import org.jgroups.protocols.relay.SiteUUID;
 import org.jgroups.stack.IpAddress;
@@ -81,7 +83,9 @@ public class Util {
      * reduces the amount of log data */
     public static int MAX_LIST_PRINT_SIZE=20;
 
-    
+    public static final Class<?>[] getUnicastProtocols() {
+        return new Class<?>[]{UNICAST.class, UNICAST2.class};
+    }
 
     public static enum AddressScope {GLOBAL, SITE_LOCAL, LINK_LOCAL, LOOPBACK, NON_LOOPBACK};
 
@@ -219,7 +223,24 @@ public class Util {
         String msg=getMessage(key);
         return msg != null? MessageFormat.format(msg, args) : null;
     }
-
+    public static Protocol[] getTestStack() {
+       
+       PING p = new PING();
+       p.setTimeout( 1000 );
+       
+       FRAG2 f = new FRAG2();
+       f.setFragSize(8000);
+       
+        return new Protocol[]{
+          new SHARED_LOOPBACK(),
+          p,
+          new NAKACK2(),
+          new UNICAST2(),
+          new STABLE(),
+          new GMS(),
+          f
+        };
+    }
 
     /**
      * Blocks until all channels have the same view
