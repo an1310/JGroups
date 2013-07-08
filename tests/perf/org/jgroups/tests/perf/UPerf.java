@@ -6,6 +6,8 @@ import org.jgroups.conf.ClassConfigurator;
 import org.jgroups.jmx.JmxConfigurator;
 import org.jgroups.protocols.UNICAST;
 import org.jgroups.protocols.UNICAST2;
+import org.jgroups.protocols.relay.RELAY2;
+import org.jgroups.protocols.relay.SiteMaster;
 import org.jgroups.stack.Protocol;
 import org.jgroups.util.*;
 
@@ -107,6 +109,19 @@ public class UPerf extends ReceiverAdapter {
         disp.setRequestMarshaller(new CustomMarshaller());
         channel.connect(groupname);
         local_addr=channel.getAddress();
+
+        if(xsite) {
+            List<String> site_names=getSites(channel);
+            for(String site_name: site_names) {
+                try {
+                    SiteMaster sm=new SiteMaster(site_name);
+                    site_masters.add(sm);
+                }
+                catch(Throwable t) {
+                    System.err.println("failed creating site master: " + t);
+                }
+            }
+        }
 
         try {
             MBeanServer server=Util.getMBeanServer();
@@ -409,6 +424,10 @@ public class UPerf extends ReceiverAdapter {
         }
     }
 
+    protected static List<String> getSites(JChannel channel) {
+        RELAY2 relay=(RELAY2)channel.getProtocolStack().findProtocol(RELAY2.class);
+        return relay.siteNames();
+    }
 
     /** Picks the next member in the view */
     private Address getReceiver() {
